@@ -1,0 +1,317 @@
+#!/usr/bin/env perl
+# Using very basic Perl to avoid fancy library requirements
+
+package HL;
+use strict;
+use warnings;
+use Data::Dumper;
+$Data::Dumper::Indent = 1;
+$Data::Dumper::Sortkeys = 1;
+use Term::ANSIColor qw/:constants colored/;
+$Term::ANSIColor::AUTORESET = 1;
+
+my $_debug = 0;
+
+sub new
+{
+    my $class = shift;
+    my $self = {};
+    bless $self, $class;
+    return $self;
+}
+
+my $_colorSpecs = {
+    yellow   => { hl => "black on_yellow",         lh => "yellow" },
+    byellow  => { hl => "black on_bright_yellow",  lh => "bright_yellow" },
+    white    => { hl => "black on_white",          lh => "white" },
+    bwhite   => { hl => "black on_bright_white",   lh => "bright_white" },
+    black    => { hl => "white on_black",          lh => "black" },
+    bblack   => { hl => "white on_bright_black",   lh => "bright_black" },
+    blue     => { hl => "black on_blue",           lh => "blue" },
+    bblue    => { hl => "black on_bright_blue",    lh => "bright_blue" },
+    magenta  => { hl => "black on_magenta",        lh => "magenta" },
+    bmagenta => { hl => "black on_bright_magenta", lh => "bright_magenta" },
+    green    => { hl => "black on_green",          lh => "green" },
+    bgreen   => { hl => "black on_bright_green",   lh => "bright_green" },
+    cyan     => { hl => "black on_cyan",           lh => "cyan" },
+    bcyan    => { hl => "black on_bright_cyan",    lh => "bright_cyan" },
+    red      => { hl => "black on_red",            lh => "red" },
+    bred     => { hl => "black on_bright_red",     lh => "bright_red" },
+};
+
+sub _debug
+{
+    return if ! $_debug;
+    my %kvs = @_;
+    foreach my $key(keys %kvs)
+    {
+        my $val = $kvs{$key};
+        print "  hl debug: ";
+        if(ref($val) eq "")
+        {
+            print "[$key] = [$val]\n";
+        }
+        else
+        {
+            print Data::Dumper->Dump([$val], [$key]);
+        }
+    }
+}
+
+$_colorSpecs->{_default} = $_colorSpecs->{byellow};
+
+sub parseCmdArgs
+{
+    my $self = shift;
+    my %args = @_;
+    my $cmdArgs = $args{cmdArgs};
+    my $rules = {};
+    my $ruleNumber = 0;
+    my $bold = 0;
+    my $reverse = 0;
+    my $respectCase = 1;
+    my $colorKey = "_default";
+    my $pre = "";
+    my $post = "";
+    my $rawColor = undef;
+    my $argsPos = 0;
+    my $escaped = 0;
+    foreach my $arg(@$cmdArgs)
+    {
+        # Deal with deleted elements (brought about by --pre and --post)
+        if(! defined $arg)
+        {
+            $argsPos++;
+            next;
+        }
+        # $specArg is true when we have caught a display modifier (vs a pattern to catch)
+        my $specArg = 0;
+        if($arg eq "--bold" || $arg eq "-b")
+        {
+            $bold = 1;
+            $specArg = 1;
+        }
+        elsif($arg eq "--reverse" || $arg eq "-r")
+        {
+            $reverse = 1;
+            $specArg = 1;
+        }
+        elsif($arg eq "-i")
+        {
+            $respectCase = 0;
+            $specArg = 1;
+        }
+        elsif($arg eq "-h" || $arg eq "--help")
+        {
+            $rules->{HELP} = 1;
+        }
+        elsif($arg eq "--colortest")
+        {
+            $rules->{COLORTEST} = 1;
+        }
+        elsif($arg eq "--pre")
+        {
+            $pre = $cmdArgs->[$argsPos + 1];
+            $cmdArgs->[$argsPos + 1] = undef;
+            $specArg = 1;
+        }
+        elsif($arg eq "--post")
+        {
+            $post = $cmdArgs->[$argsPos + 1];
+            $cmdArgs->[$argsPos + 1] = undef;
+            $specArg = 1;
+        }
+        elsif($arg eq "--escaped")
+        {
+            $escaped = 1;
+            $specArg = 1;
+        }
+
+        elsif($arg eq "--color")
+        {
+            # Allow user to specify color directives as per Term::ANSIColor.pm
+            $rawColor = $cmdArgs->[$argsPos + 1];
+            $cmdArgs->[$argsPos + 1] = undef;
+            $specArg = 1;
+        }
+        elsif($arg eq "-d" || $arg eq "--debug")
+        {
+            $_debug = 1;
+        }
+        elsif($arg =~ /^--[a-z]+$/) # --red, --bblue etc
+        {
+            my ($colorKeyTmp) = $arg =~ /--(.*)/;
+            if(exists $_colorSpecs->{$colorKeyTmp})
+            {
+                $colorKey = $colorKeyTmp;
+                $specArg = 1;
+            }
+        }
+        $argsPos++;
+        next if $specArg;
+
+        # If it ain't a specArg it must be a pattern
+        $rules->{$ruleNumber} = {
+            pattern     => $arg,
+            bold        => $bold,
+            escaped     => $escaped,
+            respectCase => $respectCase,
+            pre         => $pre,
+            post        => $post,
+        };
+        if($reverse)
+        {
+            $rules->{$ruleNumber}->{color} = $_colorSpecs->{$colorKey}->{lh};
+        }
+        else
+        {
+            $rules->{$ruleNumber}->{color} = $_colorSpecs->{$colorKey}->{hl};
+        }
+        if(defined $rawColor)
+        {
+            $rules->{$ruleNumber}->{rawColor} = $rawColor;
+            delete $rules->{$ruleNumber}->{color}
+        }
+
+        # Now reset back to defaults for the next rule
+        $colorKey = "_default";
+        $bold = 0;
+        $reverse = 0;
+        $respectCase = 1;
+        $ruleNumber++;
+        $rawColor = undef;
+        $pre = "";
+        $post = "";
+        $escaped = 0;
+    }
+    _debug("rules", $rules);
+    return $rules;
+}
+
+sub highlight
+{
+    my $self = shift;
+    my %args = @_;
+    my $rules = $args{rules};
+    my $text = $args{text};
+    foreach my $ruleNumber(sort {$a <=> $b} keys %$rules)
+    {
+        _debug("ruleNumber", $ruleNumber);
+        my $modifier = $rules->{$ruleNumber}->{respectCase} ? "-i" : "i";
+        my $pre = $rules->{$ruleNumber}->{pre};
+        my $post = $rules->{$ruleNumber}->{post};
+        my $pattern = $rules->{$ruleNumber}->{pattern};
+        if($rules->{$ruleNumber}->{escaped} && $text =~ /(?$modifier)$pre$pattern$post/)
+        {
+            $pattern =~ s/\\([|rnt'"\\])/"qq|\\$1|"/gee;
+            # print("escaped pattern [" . colored("-->" . $pattern . "<--", "black on_bright_red") . "] found\n");
+        }
+        if($text !~ /(?$modifier)$pre$pattern$post/)
+        {
+            _debug("skip", 1);
+            next;
+        }
+        my $colorSpec;
+        if(exists $rules->{$ruleNumber}->{rawColor})
+        {
+            $colorSpec = $rules->{$ruleNumber}->{rawColor};
+        }
+        else
+        {
+            $colorSpec = $rules->{$ruleNumber}->{bold} ? "bold " : "";
+            $colorSpec .= "$rules->{$ruleNumber}->{color}";
+        }
+        my $preRepl = $pre;
+        $preRepl =~ s/\\([|rnt'"\\])/"qq|\\$1|"/gee;
+        _debug("pre", $preRepl);
+        my $postRepl = $post;
+        $postRepl =~ s/\\([|rnt'"\\])/"qq|\\$1|"/gee;
+        _debug("post", $postRepl);
+        $text =~ s/(?$modifier)$pre($pattern)$post/$preRepl . colored($1, $colorSpec) . $postRepl/ge;
+    }
+    return $text;
+}
+
+sub colorTest
+{
+    my $self = shift;
+    my $testOutput = "";
+    my $maxWidth = 0;
+    foreach my $colorName(keys %$_colorSpecs)
+    {
+        if(length($colorName) > $maxWidth)
+        {
+            $maxWidth = length($colorName);
+        }
+    }
+    foreach my $colorName(sort {lc $a cmp lc $b} keys %$_colorSpecs)
+    {
+        my $colorNameWidth = length($colorName);
+        my $maxWidthDiff = $maxWidth - $colorNameWidth;
+        my $rules =
+        {
+            '0' =>
+            {
+                'bold' => 0,
+                'color' => $_colorSpecs->{$colorName}->{hl},
+                'escaped' => 0,
+                'pattern' => $colorName,
+                'post' => '',
+                'pre' => '',
+                'respectCase' => 1,
+            }
+        };
+        $testOutput .= $self->highlight(rules => $rules, text => $colorName);
+        $testOutput .= " " x $maxWidthDiff . "   ";
+        # Now in bold
+        $rules->{0}->{bold} = 1;
+        $testOutput .= $self->highlight(rules => $rules, text => $colorName);
+        $testOutput .= " " x $maxWidthDiff . "   ";
+        # Now in reverse
+        $rules->{0}->{bold} = 0;
+        $rules->{0}->{color} = $_colorSpecs->{$colorName}->{lh},;
+        $testOutput .= $self->highlight(rules => $rules, text => $colorName);
+        $testOutput .= " " x $maxWidthDiff . "   ";
+        # Now in bold + reverse
+        $rules->{0}->{bold} = 1;
+        $testOutput .= $self->highlight(rules => $rules, text => $colorName);
+        $testOutput .= " " x $maxWidthDiff . "   ";
+        $testOutput .= "\n";
+    }
+    return $testOutput;
+}
+1;
+
+package main;
+use strict;
+use warnings;
+use Data::Dumper;
+
+sub help
+{
+    print "The help has not been written\n";
+}
+
+
+sub main
+{
+    my ($args) = @_;
+    my $HL = HL->new();
+    my $rules = $HL->parseCmdArgs(cmdArgs => $args);
+    if(exists $rules->{HELP})
+    {
+        help();
+        exit;
+    }
+    elsif(exists $rules->{COLORTEST})
+    {
+        print $HL->colorTest();
+        exit;
+    }
+    while(my $line = <STDIN>)
+    {
+        print $HL->highlight(rules => $rules, text => $line);
+    }
+}
+
+main(\@ARGV);
